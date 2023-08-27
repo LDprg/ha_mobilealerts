@@ -1,18 +1,19 @@
 """Config flow for MobileAlerts."""
 from __future__ import annotations
 
-from typing import Any
-
 import logging
 import socket
 
+from typing import Any, List, Optional
+import asyncio
+import time
 import voluptuous as vol
 from homeassistant.components import dhcp, onboarding
 from homeassistant.components.network import async_get_source_ip
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
-from mobilealerts import Gateway
+from mobilealerts import Gateway, DISCOVER_GATEWAYS, BROADCAST_ADDR, PORT
 
 from .const import CONF_GATEWAY, CONF_SEND_DATA_TO_CLOUD, DOMAIN
 from .util import gateway_full_name, gateway_short_name
@@ -22,6 +23,48 @@ _LOGGER = logging.getLogger(__name__)
 
 class MobileAlertsOptionsFlowHandler(OptionsFlow):
     """Handle a MobileAlerts options flow."""
+
+    @staticmethod
+    async def discover(
+        local_ip_address: Optional[str] = None,
+        timeout: int = 2,
+    ) -> List["Gateway"]:
+        """Broadcasts discover packet and yeld gateway objects created from resposes."""
+        result = []
+        discovered = []
+        loop = asyncio.get_event_loop()
+
+        sock = Gateway.prepare_socket(timeout, local_ip_address)
+        packet = Gateway.prepare_command(DISCOVER_GATEWAYS, bytearray(6))
+
+        try:
+            sock.sendto(packet, (BROADCAST_ADDR, PORT))
+            _LOGGER.debug("Gateways discovering packet sent")
+            start_time = time.time()
+            while True:
+                try:
+                    config = await asyncio.wait_for(loop.sock_recv(sock, 256), 1)
+                    _LOGGER.debug("Gateways discovering response received %r", config)
+                except socket.timeout:
+                    break
+                except asyncio.TimeoutError:
+                    break
+                if Gateway.check_config(config):
+                    gateway_id = config[2:8]
+
+                    if gateway_id in discovered:
+                        continue
+                    discovered.append(gateway_id)
+
+                    gateway = Gateway(gateway_id.hex().upper(), local_ip_address)
+                    await gateway.init(config)
+                    result.append(gateway)
+                if (time.time() - start_time) > timeout:
+                    break
+        finally:
+            sock.close()
+
+        return result
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialize options flow."""
@@ -115,7 +158,7 @@ class MobileAlertsConfigFlowHandler(ConfigFlow, domain=DOMAIN):
         gateways = []
         ip_address = await async_get_source_ip(self.hass)
         try:
-            gateways = await Gateway.discover(ip_address)
+            gateways = await self.discover(ip_address)
         except socket.error as err:
             _LOGGER.error("Gateways discovery error %r", err)
 
