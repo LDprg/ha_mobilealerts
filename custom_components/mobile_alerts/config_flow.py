@@ -117,7 +117,9 @@ class MobileAlertsConfigFlowHandler(ConfigFlow, domain=DOMAIN):
         ip_address = await async_get_source_ip(self.hass)
         try:
             # gateways = await Gateway.discover(ip_address)
-            gateways.append(await Gateway("001D8C0E3CD2", ip_address))
+            gateway = Gateway("001D8C0E3CD2", ip_address)
+            await gateway.init(gateway)
+            gateways.append()
         except socket.error as err:
             _LOGGER.error("Gateways discovery error %r", err)
 
