@@ -21,57 +21,6 @@ from .util import gateway_full_name, gateway_short_name
 
 _LOGGER = logging.getLogger(__name__)
 
-#: all communication with the gateways are broadcasts
-BROADCAST_ADDR = "255.255.255.255"
-
-#: UDP port used by the gateway for comunnications
-PORT = 8003
-
-# Commands which acceps gateway via UDP:
-DISCOVER_GATEWAYS = 1
-
-async def discover(
-    local_ip_address: Optional[str] = None,
-    timeout: int = 2,
-) -> List["Gateway"]:
-    """Broadcasts discover packet and yeld gateway objects created from resposes."""
-    result = []
-    discovered = []
-    loop = asyncio.get_event_loop()
-
-    sock = Gateway.prepare_socket(timeout, local_ip_address)
-    packet = Gateway.prepare_command(DISCOVER_GATEWAYS, bytearray(6))
-
-    try:
-        sock.sendto(packet, (BROADCAST_ADDR, PORT))
-        _LOGGER.debug("Gateways discovering packet sent")
-        start_time = time.time()
-        while True:
-            try:
-                config = await asyncio.wait_for(loop.sock_recv(sock, 256), 1)
-                _LOGGER.debug("Gateways discovering response received %r", config)
-            except socket.timeout:
-                break
-            except asyncio.TimeoutError:
-                break
-            if Gateway.check_config(config):
-                gateway_id = config[2:8]
-
-                if gateway_id in discovered:
-                    continue
-                discovered.append(gateway_id)
-
-                gateway = Gateway(gateway_id.hex().upper(), local_ip_address)
-                await gateway.init(config)
-                result.append(gateway)
-            if (time.time() - start_time) > timeout:
-                break
-    finally:
-        sock.close()
-
-    return result
-
-
 class MobileAlertsOptionsFlowHandler(OptionsFlow):
     """Handle a MobileAlerts options flow."""
 
@@ -167,7 +116,8 @@ class MobileAlertsConfigFlowHandler(ConfigFlow, domain=DOMAIN):
         gateways = []
         ip_address = await async_get_source_ip(self.hass)
         try:
-            gateways = await discover(ip_address)
+            # gateways = await Gateway.discover(ip_address)
+            gateways.append(await Gateway("001D8C0E3CD2", ip_address))
         except socket.error as err:
             _LOGGER.error("Gateways discovery error %r", err)
 
